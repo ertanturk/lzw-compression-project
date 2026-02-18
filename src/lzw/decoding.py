@@ -99,42 +99,69 @@ class LZWDecoder:
     # Reads an LZW-encoded image file, restores the difference image,
     # reconstructs the original image, and saves it
     def decode_image_file(self, input_file_path: str, output_file_path: str) -> None:
+        # Step 1: Read the compressed file
         with open(input_file_path, "rb") as f:
             # Read metadata from the end of the file (9 bytes: 4 + 4 + 1)
-            f.seek(-9, 2)  # Seek 9 bytes from the end
-            width = struct.unpack("<I", f.read(4))[0]
-            height = struct.unpack("<I", f.read(4))[0]
-            channels = struct.unpack("B", f.read(1))[0]
+            f.seek(-9, 2)  # Go to 9 bytes before end of file
+            width = struct.unpack("<I", f.read(4))[0]  # Read width (4 bytes)
+            height = struct.unpack("<I", f.read(4))[0]  # Read height (4 bytes)
+            channels = struct.unpack("B", f.read(1))[0]  # Read channels (1 byte)
+
             # Read the compressed data (everything except the last 9 bytes)
-            f.seek(0, 2)
-            file_size = f.tell()
-            f.seek(0)
-            data = f.read(file_size - 9)
+            f.seek(0, 2)  # Go to end of file
+            file_size = f.tell()  # Get file size
+            f.seek(0)  # Go back to start
+            compressed_data = f.read(file_size - 9)  # Read all but last 9 bytes
 
-        # Decode LZW to restore difference image bytes
-        decoded_data = self.decode(data)
+        # Step 2: Decode LZW to get difference image bytes
+        decoded_data = self.decode(compressed_data)
 
-        # Restore original image from difference image
-        if channels == 1:
-            # Convert bytes back to difference image
+        # Step 3: Restore original image from difference image
+        if channels == 1:  # Grayscale image
+            # Convert bytes back to difference image (2D list)
             diff_image = utils.LZWUtils.bytes_to_difference(decoded_data, height, width)
-            # Restore original image
+
+            # Restore original image from differences
             restored = utils.LZWUtils.restore_from_difference(diff_image)
-            image = Image.fromarray(restored, mode="L")
-        elif channels == 3:
-            # Convert bytes back to difference image for RGB
-            shifted = np.frombuffer(decoded_data, dtype=np.uint16).reshape((height, width, 3))
-            diff_image = shifted.astype(np.int16) - 255
-            # Restore each channel
-            restored_channels: list[np.ndarray] = []
-            for c in range(3):
-                restored_channel = utils.LZWUtils.restore_from_difference(diff_image[:, :, c])
-                restored_channels.append(restored_channel)
-            restored = np.stack(restored_channels, axis=-1)
-            image = Image.fromarray(restored, mode="RGB")
+
+            # Convert 2D list to numpy array for PIL
+            restored_array = np.array(restored, dtype=np.uint8)
+            image = Image.fromarray(restored_array, mode="L")
+
+        elif channels == 3:  # RGB image
+            # Each channel has height * width * 2 bytes (2 bytes per pixel)
+            bytes_per_channel = height * width * 2
+
+            # Restore each color channel separately
+            restored_channels: list = []  # pyright: ignore[reportMissingTypeArgument, reportUnknownVariableType]
+
+            for channel in range(3):  # 0=Red, 1=Green, 2=Blue
+                # Extract bytes for this channel
+                start = channel * bytes_per_channel
+                end = start + bytes_per_channel
+                channel_bytes = decoded_data[start:end]
+
+                # Convert bytes to difference image
+                diff_image = utils.LZWUtils.bytes_to_difference(channel_bytes, height, width)
+
+                # Restore original channel from differences
+                restored_channel = utils.LZWUtils.restore_from_difference(diff_image)
+                restored_channels.append(restored_channel)  # type: ignore
+
+            # Combine RGB channels into one image
+            # Create 3D array: height x width x 3
+            restored_array = np.zeros((height, width, 3), dtype=np.uint8)
+            for row in range(height):
+                for col in range(width):
+                    restored_array[row][col][0] = restored_channels[0][row][col]  # Red
+                    restored_array[row][col][1] = restored_channels[1][row][col]  # Green
+                    restored_array[row][col][2] = restored_channels[2][row][col]  # Blue
+
+            image = Image.fromarray(restored_array, mode="RGB")
         else:
             raise ValueError(f"Unsupported channel count: {channels}")
 
+        # Step 4: Save the restored image
         image.save(output_file_path)
         print(f'Decoded image "{input_file_path}" to "{output_file_path}" successfully.')
         print(f"Restored image size: {width}x{height}, channels: {channels}\n")

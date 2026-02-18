@@ -100,61 +100,84 @@ class LZWEncoder:
     # Open an image file, compute difference image, encode using LZW,
     # and write the compressed data with statistics
     def encode_image_file(self, image_file_path: str, output_file_path: str) -> None:
-        # Read the image file
+        # Step 1: Read the image file
         image = Image.open(image_file_path)
         mode = image.mode
 
-        if mode == "L":  # Grayscale
+        if mode == "L":  # Grayscale image
+            # Convert image to 2D list of pixel values
             image_array = np.array(image)
-            height, width = image_array.shape
+            height = len(image_array)
+            width = len(image_array[0])
             channels = 1
 
-            # Compute difference image
+            # Step 2: Compute difference image
             diff_image = utils.LZWUtils.compute_difference_image(image_array)
+
+            # Step 3: Convert difference image to bytes
             diff_bytes = utils.LZWUtils.difference_to_bytes(diff_image)
 
-        elif mode == "RGB":  # Color - process each channel
+        elif mode == "RGB":  # Color image
             image_array = np.array(image)
-            height, width, _ = image_array.shape
+            height = len(image_array)
+            width = len(image_array[0])
             channels = 3
 
-            # Compute difference image for each channel
-            diff_channels: list[np.ndarray] = []
-            for c in range(3):
-                diff_channel = utils.LZWUtils.compute_difference_image(image_array[:, :, c])
-                diff_channels.append(diff_channel)
-            diff_image = np.stack(diff_channels, axis=-1)
-            diff_bytes = diff_image.astype(np.int16)
-            # Shift and convert to bytes
-            shifted = (diff_bytes + 255).astype(np.uint16)
-            diff_bytes = shifted.tobytes()
+            # Process each color channel (Red, Green, Blue) separately
+            all_diff_bytes = bytearray()
+
+            for channel in range(3):  # 0=Red, 1=Green, 2=Blue
+                # Extract one channel as 2D array
+                channel_array = image_array[:, :, channel]
+
+                # Compute difference image for this channel
+                diff_image = utils.LZWUtils.compute_difference_image(channel_array)
+
+                # Convert to bytes and add to result
+                channel_bytes = utils.LZWUtils.difference_to_bytes(diff_image)
+                all_diff_bytes.extend(channel_bytes)
+
+            diff_bytes = bytes(all_diff_bytes)
         else:
             raise ValueError(f"Unsupported image mode: {mode}")
 
-        # Calculate entropy of original image
+        # Step 4: Calculate entropy of original image (for comparison)
         original_bytes, _, _, _ = utils.LZWUtils.open_image_file(image_file_path)
         original_entropy = utils.LZWUtils.calculate_entropy(original_bytes)
 
-        # Calculate entropy of difference image
+        # Step 5: Calculate entropy of difference image
         diff_entropy = utils.LZWUtils.calculate_entropy(diff_bytes)
 
-        # Encode difference image using LZW
+        # Step 6: Encode difference image using LZW algorithm
         encoded_data = self.encode(diff_bytes)
 
-        # Save compressed file with metadata
+        # Step 7: Save compressed file with metadata at the end
         with open(output_file_path, "wb") as f:
+            # Write compressed data
             f.write(encoded_data)
-            f.write(struct.pack("<I", width))
-            f.write(struct.pack("<I", height))
-            f.write(struct.pack("B", channels))
+            # Write image dimensions (needed for decoding)
+            f.write(struct.pack("<I", width))  # 4 bytes for width
+            f.write(struct.pack("<I", height))  # 4 bytes for height
+            f.write(struct.pack("B", channels))  # 1 byte for channels
 
-        # Calculate statistics
+        # Step 8: Calculate and print statistics
         original_size = os.path.getsize(image_file_path)
         compressed_size = os.path.getsize(output_file_path)
-        num_codes = len(diff_bytes)  # Number of symbols encoded
+
+        # Number of symbols we encoded
+        num_symbols = len(diff_bytes)
+
+        # Total bits in compressed output
         total_bits = len(encoded_data) * 8
-        avg_code_length = utils.LZWUtils.calculate_average_code_length(num_codes, total_bits)
-        compression_ratio = original_size / compressed_size if compressed_size > 0 else float("inf")
+
+        # Average bits per symbol
+        avg_code_length = utils.LZWUtils.calculate_average_code_length(num_symbols, total_bits)
+
+        # Compression ratio = original size / compressed size
+        if compressed_size > 0:
+            compression_ratio = original_size / compressed_size
+        else:
+            compression_ratio = 0
 
         # Print results
         print(f'Encoded image "{image_file_path}" to "{output_file_path}" successfully.')
