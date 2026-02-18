@@ -1,5 +1,5 @@
 class LZWEncoder:
-    # Constructor initializes the encoder with an empty dictionary and sets the initial code size
+    # Constructor initializes the encoder with the base dictionary (256 single-byte entries) and sets the initial code size
     def __init__(self) -> None:
         self.dictionary = {bytes([i]): i for i in range(256)}
         self.dictionary_limit = 4096  # Maximum number of entries in the dictionary (12 bits)
@@ -48,7 +48,7 @@ class LZWEncoder:
         result.extend(self.flush())
         return bytes(result)
 
-    # Calculates the number of bits needed to represent the current code size
+    # Increases the code size when the dictionary grows beyond the current bit width limit
     def calculate_code_size(self) -> int:
         if self.next_code == (1 << self.code_size) and self.code_size < 12:
             self.code_size += 1
@@ -76,7 +76,7 @@ class LZWEncoder:
 
         return bytes(result)
 
-    # Create a new file with the encoded data with the .lzw extension
+    # Reads a file, encodes its contents using LZW, and writes the result to the output file
     def encode_file(self, input_file_path: str, output_file_path: str) -> None:
         with open(input_file_path, "rb") as f:
             data = f.read()

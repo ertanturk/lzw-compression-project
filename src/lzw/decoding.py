@@ -1,5 +1,5 @@
 class LZWDecoder:
-    # Initializes the decoder with an empty dictionary and sets the initial code size
+    # Initializes the decoder with the base dictionary (256 single-byte entries) and sets the initial code size
     def __init__(self) -> None:
         self.dictionary = {i: bytes([i]) for i in range(256)}
         self.dictionary_limit = 4096  # Maximum number of entries in the dictionary (12 bits)
@@ -60,7 +60,7 @@ class LZWDecoder:
         self.bit_count -= self.code_size
         return code
 
-    # Calculates the number of bits needed to represent the current code size
+    # Increases the code size when the dictionary grows beyond the current bit width limit
     # Note: Decoder must transition one step earlier than encoder because
     # it adds dictionary entries after reading, while encoder adds before writing
     def calculate_code_size(self) -> int:
@@ -68,7 +68,7 @@ class LZWDecoder:
             self.code_size += 1
         return self.code_size
 
-    # Create a new file with the decoded data with the .txt extension
+    # Reads an LZW-encoded file, decodes its contents, and writes the result to the output file
     def decode_file(self, input_file_path: str, output_file_path: str) -> None:
         with open(input_file_path, "rb") as f:
             data = f.read()
