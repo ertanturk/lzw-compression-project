@@ -8,14 +8,13 @@ from . import utils
 
 
 class LZWEncoder:
-    # Constructor initializes the encoder
-    # with the base dictionary (256 single-byte entries) and sets the initial code size
+    # set up the initial dictionary with all single bytes (0-255)
     def __init__(self) -> None:
         self.dictionary = {bytes([i]): i for i in range(256)}
         self.dictionary_limit = 4096  # Maximum number of entries in the dictionary (12 bits)
         self.reset()
 
-    # Resets the encoder to its initial state
+    # reset everything so we can encode a new file
     def reset(self) -> None:
         self.dictionary: dict[bytes, int] = {bytes([i]): i for i in range(256)}
         self.next_code: int = 256
@@ -24,12 +23,12 @@ class LZWEncoder:
         self.bit_buffer: int = 0
         self.bit_count: int = 0
 
-    # Encodes the chunk of data using the LZW algorithm
+    # main encoding function - takes bytes and returns compressed bytes
     def encode(self, data: bytes) -> bytes:
         self.reset()
         result = bytearray()
 
-        # Process each byte in the input data and build the dictionary dynamically
+        # go through each byte one by one
         for byte in data:
             current_byte = bytes([byte])
             combined_string = self.current_string + current_byte
@@ -37,11 +36,11 @@ class LZWEncoder:
             if combined_string in self.dictionary:
                 self.current_string = combined_string
             else:
-                # Output the code for the current string
+                # this combo isnt in the dictionary yet so output current code
                 code = self.dictionary[self.current_string]
                 result.extend(self.pack_code(code))
 
-                # Add the combined string to the dictionary if there's room
+                # add new entry to dictionary if theres room
                 if self.next_code < self.dictionary_limit:
                     self.dictionary[combined_string] = self.next_code
                     self.next_code += 1
@@ -49,22 +48,22 @@ class LZWEncoder:
 
                 self.current_string = current_byte
 
-        # Output the code for the last string if it exists
+        # dont forget the last string
         if self.current_string:
             code = self.dictionary[self.current_string]
             result.extend(self.pack_code(code))
 
-        # Flush any remaining bits in the buffer
+        # flush leftover bits
         result.extend(self.flush())
         return bytes(result)
 
-    # Increases the code size when the dictionary grows beyond the current bit width limit
+    # bump up code size when dictionary gets too big for current bits
     def calculate_code_size(self) -> int:
         if self.next_code == (1 << self.code_size) and self.code_size < 12:
             self.code_size += 1
         return self.code_size
 
-    # Packs the code into the bit buffer and returns bytes when enough bits are accumulated
+    # pack a code into the bit buffer and return full bytes when ready
     def pack_code(self, code: int) -> bytes:
         self.bit_buffer |= code << self.bit_count
         self.bit_count += self.code_size
@@ -75,7 +74,7 @@ class LZWEncoder:
             self.bit_count -= 8
         return result
 
-    # Flushes the remaining bits in the buffer and returns any remaining bytes
+    # push out whatever bits are left in the buffer
     def flush(self) -> bytes:
         result = bytearray()
 
@@ -86,7 +85,7 @@ class LZWEncoder:
 
         return bytes(result)
 
-    # Reads a file, encodes its contents using LZW, and writes the result to the output file
+    # read a file, compress it with LZW and save the result
     def encode_file(self, input_file_path: str, output_file_path: str) -> None:
         with open(input_file_path, "rb") as f:
             data = f.read()
@@ -97,24 +96,23 @@ class LZWEncoder:
         print(f"Calculated code length: {len(encoded_data)} bytes")
         print(utils.LZWUtils.calculate_compression(input_file_path, output_file_path) + "\n")
 
-    # Open an image file, compute difference image, encode using LZW,
-    # and write the compressed data with statistics
+    # compress an image using difference encoding + LZW
     def encode_image_file(self, image_file_path: str, output_file_path: str) -> None:
-        # Step 1: Read the image file
+        # read the image
         image = Image.open(image_file_path)
         mode = image.mode
 
         if mode == "L":  # Grayscale image
-            # Convert image to 2D list of pixel values
+            # get pixel values as 2D array
             image_array = np.array(image)
             height = len(image_array)
             width = len(image_array[0])
             channels = 1
 
-            # Step 2: Compute difference image
+            # compute differences between neighboring pixels
             diff_image = utils.LZWUtils.compute_difference_image(image_array)
 
-            # Step 3: Convert difference image to bytes
+            # turn differences into bytes
             diff_bytes = utils.LZWUtils.difference_to_bytes(diff_image)
 
         elif mode == "RGB":  # Color image
@@ -123,17 +121,17 @@ class LZWEncoder:
             width = len(image_array[0])
             channels = 3
 
-            # Process each color channel (Red, Green, Blue) separately
+            # do each color channel (R, G, B) separately
             all_diff_bytes = bytearray()
 
             for channel in range(3):  # 0=Red, 1=Green, 2=Blue
-                # Extract one channel as 2D array
+                # grab one channel
                 channel_array = image_array[:, :, channel]
 
-                # Compute difference image for this channel
+                # compute differences for this channel
                 diff_image = utils.LZWUtils.compute_difference_image(channel_array)
 
-                # Convert to bytes and add to result
+                # convert to bytes
                 channel_bytes = utils.LZWUtils.difference_to_bytes(diff_image)
                 all_diff_bytes.extend(channel_bytes)
 
@@ -141,45 +139,43 @@ class LZWEncoder:
         else:
             raise ValueError(f"Unsupported image mode: {mode}")
 
-        # Step 4: Calculate entropy of original image (for comparison)
+        # entropy of original image
         original_bytes, _, _, _ = utils.LZWUtils.open_image_file(image_file_path)
         original_entropy = utils.LZWUtils.calculate_entropy(original_bytes)
 
-        # Step 5: Calculate entropy of difference image
+        # entropy of the difference image
         diff_entropy = utils.LZWUtils.calculate_entropy(diff_bytes)
 
-        # Step 6: Encode difference image using LZW algorithm
+        # compress with LZW
         encoded_data = self.encode(diff_bytes)
 
-        # Step 7: Save compressed file with metadata at the end
+        # save compressed file with dimensions at the end
         with open(output_file_path, "wb") as f:
-            # Write compressed data
             f.write(encoded_data)
-            # Write image dimensions (needed for decoding)
             f.write(struct.pack("<I", width))  # 4 bytes for width
             f.write(struct.pack("<I", height))  # 4 bytes for height
             f.write(struct.pack("B", channels))  # 1 byte for channels
 
-        # Step 8: Calculate and print statistics
+        # calculate and print stats
         original_size = os.path.getsize(image_file_path)
         compressed_size = os.path.getsize(output_file_path)
 
-        # Number of symbols we encoded
+        # how many symbols we encoded
         num_symbols = len(diff_bytes)
 
-        # Total bits in compressed output
+        # total bits in output
         total_bits = len(encoded_data) * 8
 
-        # Average bits per symbol
+        # average bits per symbol
         avg_code_length = utils.LZWUtils.calculate_average_code_length(num_symbols, total_bits)
 
-        # Compression ratio = original size / compressed size
+        # compression ratio
         if compressed_size > 0:
             compression_ratio = original_size / compressed_size
         else:
             compression_ratio = 0
 
-        # Print results
+        # print everything
         print(f'Encoded image "{image_file_path}" to "{output_file_path}" successfully.')
         print(f"Original size: {original_size} bytes")
         print(f"Compressed size: {compressed_size} bytes")

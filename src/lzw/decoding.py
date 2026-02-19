@@ -7,14 +7,13 @@ from . import utils
 
 
 class LZWDecoder:
-    # Initializes the decoder with the
-    # base dictionary (256 single-byte entries) and sets the initial code size
+    # set up the initial dictionary with all single bytes (0-255)
     def __init__(self) -> None:
         self.dictionary = {i: bytes([i]) for i in range(256)}
         self.dictionary_limit = 4096  # Maximum number of entries in the dictionary (12 bits)
         self.reset()
 
-    # Resets the decoder to its initial state
+    # reset everything so we can decode a new file
     def reset(self) -> None:
         self.dictionary = {i: bytes([i]) for i in range(256)}
         self.next_code: int = 256
@@ -24,13 +23,13 @@ class LZWDecoder:
         self.data: bytes = b""
         self.data_index: int = 0
 
-    # Decodes the chunk of data using the LZW algorithm
+    # main decoding function - takes compressed bytes and returns original bytes
     def decode(self, data: bytes) -> bytes:
         self.reset()
         self.data = data
         result = bytearray()
 
-        # Read first code
+        # read first code
         first_code = self.read_code()
         if first_code is None:
             return b""
@@ -52,7 +51,7 @@ class LZWDecoder:
 
             result.extend(current_string)
 
-            # Add new entry to the dictionary if there's room
+            # add new dictionary entry if theres room
             if self.next_code < self.dictionary_limit:
                 self.dictionary[self.next_code] = previous_string + current_string[:1]
                 self.next_code += 1
@@ -62,9 +61,9 @@ class LZWDecoder:
 
         return bytes(result)
 
-    # Read a single code from the bit buffer, loading bytes as needed
+    # read one code from the bit buffer
     def read_code(self) -> int | None:
-        # Load more bytes into the buffer as needed
+        # load more bytes if we need them
         while self.bit_count < self.code_size and self.data_index < len(self.data):
             self.bit_buffer |= self.data[self.data_index] << self.bit_count
             self.bit_count += 8
@@ -78,15 +77,15 @@ class LZWDecoder:
         self.bit_count -= self.code_size
         return code
 
-    # Increases the code size when the dictionary grows beyond the current bit width limit
-    # Note: Decoder must transition one step earlier than encoder because
-    # it adds dictionary entries after reading, while encoder adds before writing
+    # bump up code size when dictionary gets big enough
+    # decoder needs to do this one step earlier than encoder
+    # because it adds entries after reading, encoder adds before writing
     def calculate_code_size(self) -> int:
         if self.next_code >= (1 << self.code_size) - 1 and self.code_size < 12:
             self.code_size += 1
         return self.code_size
 
-    # Reads an LZW-encoded file, decodes its contents, and writes the result to the output file
+    # read a compressed file, decode it and save the result
     def decode_file(self, input_file_path: str, output_file_path: str) -> None:
         with open(input_file_path, "rb") as f:
             data = f.read()
@@ -96,60 +95,52 @@ class LZWDecoder:
         print(f'Decoded "{input_file_path}" to "{output_file_path}" successfully.')
         print(f"Calculated code length: {len(decoded_data)} bytes" + "\n")
 
-    # Reads an LZW-encoded image file, restores the difference image,
-    # reconstructs the original image, and saves it
+    # decompress an image file and restore from differences
     def decode_image_file(self, input_file_path: str, output_file_path: str) -> None:
-        # Step 1: Read the compressed file
+        # read the compressed file
         with open(input_file_path, "rb") as f:
-            # Read metadata from the end of the file (9 bytes: 4 + 4 + 1)
-            f.seek(-9, 2)  # Go to 9 bytes before end of file
-            width = struct.unpack("<I", f.read(4))[0]  # Read width (4 bytes)
-            height = struct.unpack("<I", f.read(4))[0]  # Read height (4 bytes)
-            channels = struct.unpack("B", f.read(1))[0]  # Read channels (1 byte)
+            # metadata is at the end of the file (9 bytes: 4+4+1)
+            f.seek(-9, 2)  # go 9 bytes before end
+            width = struct.unpack("<I", f.read(4))[0]
+            height = struct.unpack("<I", f.read(4))[0]
+            channels = struct.unpack("B", f.read(1))[0]
 
-            # Read the compressed data (everything except the last 9 bytes)
-            f.seek(0, 2)  # Go to end of file
-            file_size = f.tell()  # Get file size
-            f.seek(0)  # Go back to start
-            compressed_data = f.read(file_size - 9)  # Read all but last 9 bytes
+            # read the actual compressed data (everything except last 9 bytes)
+            f.seek(0, 2)  # go to end
+            file_size = f.tell()
+            f.seek(0)  # go back to start
+            compressed_data = f.read(file_size - 9)
 
-        # Step 2: Decode LZW to get difference image bytes
+        # decode LZW to get the difference image bytes
         decoded_data = self.decode(compressed_data)
 
-        # Step 3: Restore original image from difference image
-        if channels == 1:  # Grayscale image
-            # Convert bytes back to difference image (2D list)
+        # restore the original image
+        if channels == 1:  # Grayscale
+            # bytes -> difference image -> original image
             diff_image = utils.LZWUtils.bytes_to_difference(decoded_data, height, width)
-
-            # Restore original image from differences
             restored = utils.LZWUtils.restore_from_difference(diff_image)
-
-            # Convert 2D list to numpy array for PIL
             restored_array = np.array(restored, dtype=np.uint8)
             image = Image.fromarray(restored_array, mode="L")
 
-        elif channels == 3:  # RGB image
-            # Each channel has height * width * 2 bytes (2 bytes per pixel)
+        elif channels == 3:  # RGB
+            # each channel has height * width * 2 bytes
             bytes_per_channel = height * width * 2
 
-            # Restore each color channel separately
+            # restore each color channel separately
             restored_channels: list = []  # pyright: ignore[reportMissingTypeArgument, reportUnknownVariableType]
 
             for channel in range(3):  # 0=Red, 1=Green, 2=Blue
-                # Extract bytes for this channel
+                # get this channel's bytes
                 start = channel * bytes_per_channel
                 end = start + bytes_per_channel
                 channel_bytes = decoded_data[start:end]
 
-                # Convert bytes to difference image
+                # bytes -> differences -> original channel
                 diff_image = utils.LZWUtils.bytes_to_difference(channel_bytes, height, width)
-
-                # Restore original channel from differences
                 restored_channel = utils.LZWUtils.restore_from_difference(diff_image)
                 restored_channels.append(restored_channel)  # type: ignore
 
-            # Combine RGB channels into one image
-            # Create 3D array: height x width x 3
+            # put R, G, B channels back together
             restored_array = np.zeros((height, width, 3), dtype=np.uint8)
             for row in range(height):
                 for col in range(width):
@@ -161,7 +152,7 @@ class LZWDecoder:
         else:
             raise ValueError(f"Unsupported channel count: {channels}")
 
-        # Step 4: Save the restored image
+        # save it
         image.save(output_file_path)
         print(f'Decoded image "{input_file_path}" to "{output_file_path}" successfully.')
         print(f"Restored image size: {width}x{height}, channels: {channels}\n")
